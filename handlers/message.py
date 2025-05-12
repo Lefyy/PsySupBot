@@ -2,7 +2,8 @@ from aiogram import Router, F
 from aiogram.types import Message
 from aiogram.filters.state import StateFilter
 
-from db import add_dialogue_message, decrement_balance, get_user
+from db import add_dialogue_message, get_user, is_subscription_expired
+from keyboards.payment_keyboard import get_pay_inline_keyboard
 
 from states.form import Form
 from ai_service import get_ai_response
@@ -30,10 +31,10 @@ async def handle_all_messages(message: Message) -> None:
         await message.answer("Произошла ошибка при получении ваших данных.")
         return
 
-    current_balance = user_data[4]
+    expiring_date = user_data[4]
 
-    if current_balance > 0:
-        print(f"Баланс пользователя {user_id}: {current_balance}. Обрабатываем сообщение AI.")
+    if not is_subscription_expired(user_id):
+        print(f"Подписка пользователя {user_id} активна: {expiring_date}. Обрабатываем сообщение AI.")
 
         ai_response_text = None
 
@@ -41,17 +42,10 @@ async def handle_all_messages(message: Message) -> None:
             ai_response_text = await get_ai_response(user_id, user_text)
 
             if ai_response_text is not None:
-                new_balance = decrement_balance(user_id)
 
                 await message.answer(ai_response_text)
 
                 add_dialogue_message(user_id, ai_response_text, 'bot')
-
-                if new_balance is not None and new_balance == 0:
-                    await message.answer(
-                        "Это было твое последнее сообщение на балансе. Пожалуйста, пополни счет, чтобы продолжить.")
-                elif new_balance is not None and new_balance <= 3 and new_balance > 0:
-                    await message.answer(f"Осталось {new_balance} сообщени(е/я) на балансе.")
 
             else:
                 print(
@@ -66,10 +60,10 @@ async def handle_all_messages(message: Message) -> None:
                 "Произошла непредвиденная ошибка при обработке вашего запроса. Мы уже работаем над этим.")
 
     else:
-        print(f"Баланс пользователя {user_id}: 0. Просим оплатить.")
-        payment_message = "Твой баланс сообщений исчерпан. Пожалуйста, оплати услугу поддержки, чтобы продолжить общение."
-        # Здесь в будущем можно добавить кнопку для перехода к оплате
-        await message.answer(payment_message)
+        print(f"Подписка пользователя {user_id} истекла. Просим оплатить.")
+        payment_message = "Твоя подписка истекла. Пожалуйста, оплати услугу поддержки, чтобы продолжить общение."
+        await message.answer(payment_message,
+                             reply_markup=get_pay_inline_keyboard())
 
 @message_router.message(~F.text, ~StateFilter(Form.waiting_for_name))
 async def handle_non_text_messages(message: Message) -> None:
