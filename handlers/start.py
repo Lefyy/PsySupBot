@@ -3,7 +3,7 @@ from aiogram.filters import CommandStart
 from aiogram.types import Message
 from aiogram.fsm.context import FSMContext
 
-from db import add_user, add_dialogue_message, get_user, update_user_name
+from db import add_user, get_user, update_user_name
 
 from keyboards.main_menu import get_main_menu_keyboard
 from states.form import Form
@@ -14,7 +14,7 @@ start_router = Router()
 async def command_start_handler(message: Message, state: FSMContext) -> None:
     user = message.from_user
     if not user:
-        await message.answer("Привет! Я бот психологической поддержки. Не могу определить твои данные пользователя.")
+        await message.answer("Ошибка! Не могу определить твои данные пользователя.")
         return
 
     user_id = user.id
@@ -38,8 +38,6 @@ async def command_start_handler(message: Message, state: FSMContext) -> None:
             "P.S. Я не заменяю психотерапевта, но могу поддержать, пока ты ищешь своего специалиста. И да, я не спрашиваю «Как ваши отношения с матерью?»… если ты сам не захочешь об этом поговорить. 😉"
                     )
 
-        await state.set_state(Form.waiting_for_name)
-
     else:
         print(f"Существующий пользователь: {user_id}")
         current_name = user_in_db[1]
@@ -54,7 +52,7 @@ async def process_name(message: Message, state: FSMContext) -> None:
     user = message.from_user
     if not user or not message.text:
          await message.answer("Произошла ошибка при получении имени. Попробуй еще раз или начни с /start.")
-         await state.clear() # Сбрасываем состояние
+         await state.clear()
          return
 
     new_name = message.text.strip()

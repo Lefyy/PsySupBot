@@ -7,7 +7,7 @@ from states.form import Form
 
 from keyboards.profile_keyboard import get_profile_inline_keyboard
 
-from db import get_user, add_dialogue_message
+from db import get_user
 
 from datetime import datetime
 
@@ -21,16 +21,15 @@ async def handle_profile_command(message: Message) -> None:
         return
 
     user_id = user.id
-    user_data = get_user(user_id)
+    user_data = get_user(user_id)  # Получаем данные пользователя из БД
 
     if user_data is None:
         await message.answer("Произошла ошибка при получении данных вашего профиля.")
         return
 
     full_name = user_data[1]
-    # username = user_data[2] # Если хотим показать username
     join_date_str = user_data[3]
-    message_balance = user_data[4]
+    expiry_date_str = user_data[4]
 
     try:
         join_date = datetime.fromisoformat(join_date_str)
@@ -38,22 +37,29 @@ async def handle_profile_command(message: Message) -> None:
     except (ValueError, TypeError):
         formatted_join_date = "Неизвестно"
 
+    try:
+        expiry_date = datetime.fromisoformat(expiry_date_str)
+        formatted_expiry_date = expiry_date.strftime("%d.%m.%Y %H:%M")
+
+        if datetime.now() >= expiry_date:
+            subscription_status = "Истекла"
+        else:
+            subscription_status = f"Активна до {formatted_expiry_date}"
+    except (ValueError, TypeError):
+        formatted_expiry_date = "Неизвестно"
+        subscription_status = "Неизвестно"
+
     profile_text = (
         f"👤 **Твой профиль:**\n"
         f"Имя: {full_name}\n"
-        # f"Username: @{username}\n" if username else "" # Можно добавить username, если есть
         f"Дата присоединения: {formatted_join_date}\n"
-        f"Сообщений на балансе: {message_balance}"
+        f"Подписка: {subscription_status}"
     )
-
-    if message.text:
-        add_dialogue_message(user_id, message.text, 'user')
 
     await message.answer(
         profile_text,
-        reply_markup=get_profile_inline_keyboard()
+        reply_markup=get_profile_inline_keyboard()  # Прикрепляем инлайн-клавиатуру "Изменить имя"
     )
-    add_dialogue_message(user_id, profile_text, 'bot')
 
 @profile_router.callback_query(F.data == "change_name_profile")
 async def handle_change_name_callback(callback_query: CallbackQuery, state: FSMContext) -> None:
@@ -68,5 +74,3 @@ async def handle_change_name_callback(callback_query: CallbackQuery, state: FSMC
 
     await state.set_state(Form.waiting_for_name)
     print(f"Пользователь {user.id} запросил изменение имени. Установлено состояние waiting_for_name.")
-
-    add_dialogue_message(user.id, "Пожалуйста, введи новое имя, которое будет использоваться.", 'bot')

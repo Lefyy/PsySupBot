@@ -1,7 +1,9 @@
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 
 DATABASE_NAME = 'psych_support_bot.db'
+FREE_TRIAL_DAYS = 2
+SUBSCRIPTION_DAYS_PER_PAYMENT = 30
 
 def init_db():
     """
@@ -17,7 +19,7 @@ def init_db():
             full_name TEXT,
             username TEXT,
             join_date TEXT, -- Храним дату как текст в формате ISO8601
-            message_balance INTEGER DEFAULT 10
+            subscription_expiry_date TEXT
         )
     ''')
 
@@ -60,19 +62,20 @@ def add_user(user_id: int, full_name: str, username: str | None):
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     try:
-        # Проверяем, есть ли уже такой пользователь
         cursor.execute("SELECT id FROM users WHERE id = ?", (user_id,))
         existing_user = cursor.fetchone()
 
         if not existing_user:
-            # Если пользователя нет, добавляем его
-            join_date = datetime.now().isoformat() # Текущая дата и время в формате ISO8601
-            cursor.execute("INSERT INTO users (id, full_name, username, join_date) VALUES (?, ?, ?, ?)",
-                           (user_id, full_name, username, join_date))
+            now = datetime.now()
+            now_iso = now.isoformat()
+            expiry_date = now + timedelta(days=FREE_TRIAL_DAYS)
+            expiry_date_iso = expiry_date.isoformat()
+            cursor.execute("INSERT INTO users (id, full_name, username, join_date, subscription_expiry_date) VALUES (?, ?, ?, ?, ?)",
+                           (user_id, full_name, username, now_iso, expiry_date_iso))
             conn.commit()
             print(f"Добавлен новый пользователь: {user_id}")
         else:
-            print(f"Пользователь {user_id} уже существует.") # Можно добавить для отладки
+            print(f"Пользователь {user_id} уже существует.")
 
     except sqlite3.Error as e:
         print(f"Ошибка при добавлении пользователя: {e}")
@@ -87,7 +90,7 @@ def get_user(user_id: int):
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT id, full_name, username, join_date, message_balance FROM users WHERE id = ?", (user_id,))
+        cursor.execute("SELECT id, full_name, username, join_date, subscription_expiry_date FROM users WHERE id = ?", (user_id,))
         user_data = cursor.fetchone()
         return user_data
     except sqlite3.Error as e:
@@ -154,35 +157,89 @@ def add_dialogue_message(user_id: int, message_text: str, sender: str):
     finally:
         conn.close()
 
-def decrement_balance(user_id: int) -> int | None:
+def is_subscription_expired(user_id: int) -> bool:
     """
-    Уменьшает message_balance пользователя на 1.
-    Возвращает новый баланс или None в случае ошибки или если баланс уже 0.
+    Проверяет, истекла ли подписка пользователя (т.е., текущая дата >= subscription_expiry_date).
     """
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT message_balance FROM users WHERE id = ?", (user_id,))
+        cursor.execute("SELECT subscription_expiry_date FROM users WHERE id = ?", (user_id,))
         result = cursor.fetchone()
         if result is None:
-            print(f"Ошибка: Пользователь с ID {user_id} не найден для уменьшения баланса.")
-            return None
+            print(f"DEBUG: is_subscription_expired: Пользователь {user_id} не найден.")
+            return True
 
-        current_balance = result[0]
+        expiry_date_str = result[0]
 
-        if current_balance > 0:
-            new_balance = current_balance - 1
-            cursor.execute("UPDATE users SET message_balance = ? WHERE id = ?", (new_balance, user_id))
-            conn.commit()
-            print(f"Баланс пользователя {user_id} уменьшен до {new_balance}.")
-            return new_balance
-        else:
-            print(f"Баланс пользователя {user_id} уже 0 или меньше.")
-            return current_balance
+        # Если subscription_expiry_date NULL или пустая строка, считаем, что истек
+        if not expiry_date_str:
+            print(f"DEBUG: is_subscription_expired: subscription_expiry_date для пользователя {user_id} = NULL/пусто.")
+            return True
+
+        # Парсим дату истечения
+        try:
+            expiry_date = datetime.fromisoformat(expiry_date_str)
+        except (ValueError, TypeError):
+             print(f"DEBUG: is_subscription_expired: Некорректный формат subscription_expiry_date для пользователя {user_id}: {expiry_date_str}")
+             return True
+
+        # Сравниваем текущее время с датой истечения
+        now = datetime.now()
+        return now >= expiry_date # Подписка истекла, если текущее время >= времени истечения
 
     except sqlite3.Error as e:
-        print(f"Ошибка при уменьшении баланса пользователя {user_id}: {e}")
-        return None # Возвращаем None в случае ошибки
+        print(f"DEBUG: is_subscription_expired: Ошибка БД для пользователя {user_id}: {e}")
+        return True # В случае ошибки БД тоже считаем, что истек
+    finally:
+        conn.close()
+
+def extend_subscription(user_id: int, days_to_add: int) -> datetime | None:
+    """
+    Продлевает подписку пользователя на указанное количество дней.
+    Продление начинается с текущей даты истечения, если она в будущем,
+    иначе - с текущей даты.
+    Возвращает новую дату истечения (datetime) или None в случае ошибки.
+    """
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT subscription_expiry_date FROM users WHERE id = ?", (user_id,))
+        result = cursor.fetchone()
+        if result is None:
+            print(f"DEBUG: extend_subscription: Пользователь {user_id} не найден.")
+            return None
+
+        current_expiry_date_str = result[0]
+        now = datetime.now()
+
+        # Определяем, с какой даты начинать продление
+        start_date_for_extension = now # По умолчанию начинаем с текущей даты
+
+        if current_expiry_date_str:
+            try:
+                current_expiry_date = datetime.fromisoformat(current_expiry_date_str)
+                # Если текущая дата истечения в будущем, продлеваем с нее
+                if current_expiry_date > now:
+                    start_date_for_extension = current_expiry_date
+            except (ValueError, TypeError):
+                print(f"DEBUG: extend_subscription: Некорректный формат текущей даты истечения для {user_id}: {current_expiry_date_str}")
+                # Если формат некорректен, начинаем продление с текущей даты (start_date_for_extension уже = now)
+
+
+        # Вычисляем новую дату истечения
+        new_expiry_date = start_date_for_extension + timedelta(days=days_to_add)
+        new_expiry_date_iso = new_expiry_date.isoformat()
+
+        # Обновляем дату истечения в БД
+        cursor.execute("UPDATE users SET subscription_expiry_date = ? WHERE id = ?", (new_expiry_date_iso, user_id))
+        conn.commit()
+        print(f"DEBUG: Подписка пользователя {user_id} продлена. Новая дата истечения: {new_expiry_date_iso}.")
+        return new_expiry_date
+
+    except sqlite3.Error as e:
+        print(f"DEBUG: Ошибка БД при продлении подписки пользователя {user_id}: {e}")
+        return None
     finally:
         conn.close()
 
