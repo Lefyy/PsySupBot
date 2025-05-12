@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+
+dist/
+*.egg-info/
+
+.coverage
+*.py,cover
+.cache/
+
+.venv
+.venv/
+.env
+
+psych_support_bot.db
