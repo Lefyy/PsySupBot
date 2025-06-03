@@ -19,9 +19,9 @@ AI_PERSONA_CONTEXT = """
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
-DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
+DEEPSEEK_BASE_URL = "https://openrouter.ai/api/v1"
 
-DEEPSEEK_MODEL = 'deepseek-chat'
+DEEPSEEK_MODEL = 'deepseek/deepseek-v3-base:free'
 
 # --- Инициализация клиента DeepSeek API ---
 # Создаем клиент OpenAI, но указываем ему базовый URL DeepSeek.
@@ -50,7 +50,7 @@ async def get_ai_response(user_id: int, current_message_text: str) -> str | None
 
     try:
         # Получаем последние 10 сообщений диалога из БД
-        dialogue_history = get_recent_dialogue(user_id, limit=1)
+        dialogue_history = get_recent_dialogue(user_id, limit=5)
 
         # Формируем список сообщений для DeepSeek API в формате OpenAI-совместимых чат-комплишенов.
         # Этот формат требует список словарей, каждый из которых имеет 'role' и 'content'.
@@ -73,7 +73,7 @@ async def get_ai_response(user_id: int, current_message_text: str) -> str | None
         # print(f"Сообщения для API: {messages}") # Можно включить для детальной отладки
 
         # Выполняем запрос к API DeepSeek.
-        response = await deepseek_client.chat.completions.create(
+        response = deepseek_client.chat.completions.create(
             model=DEEPSEEK_MODEL,
             messages=messages,
             temperature=0.7, # Температура генерации (от 0 до 2.0). Выше - креативнее, ниже - точнее.
