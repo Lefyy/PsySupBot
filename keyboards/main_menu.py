@@ -9,6 +9,9 @@ def get_main_menu_keyboard():
             [ # Первый ряд кнопок
                 KeyboardButton(text="Профиль"), # Кнопка "Профиль"
                 KeyboardButton(text="Информация"), # Кнопка "Информация"
+            ],
+            [
+                KeyboardButton(text='Подписка')
             ]
         ],
         resize_keyboard=True, # Сделать клавиатуру компактнее

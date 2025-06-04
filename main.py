@@ -1,4 +1,7 @@
 from dotenv import load_dotenv
+
+from handlers.payment import payment_router
+
 load_dotenv()
 
 import asyncio
@@ -22,7 +25,7 @@ async def main():
 
     dp = Dispatcher()
 
-    dp.include_routers(start_router, info_router, profile_router, message_router)
+    dp.include_routers(start_router, info_router, profile_router, payment_router, message_router)
 
     init_db()
 

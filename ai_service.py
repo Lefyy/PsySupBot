@@ -1,14 +1,12 @@
-import google.generativeai as genai
 import os
+from openai import OpenAI
 from db import get_recent_dialogue
 
-# --- Контекст / Системные инструкции для нейросети ---
-# Этот текст не виден пользователю, но определяет поведение бота.
 AI_PERSONA_CONTEXT = """
 Ты дружелюбный и поддерживающий ИИ-помощник для студентов.
 Твоя главная цель – выслушать, понять и предложить эмоциональную и информационную поддержку в их академических и личных переживаниях, связанных с учебой в ВУЗе.
 Будь эмпатичным, проявляй терпение и понимание.
-Используй поддерживающий и ободряющий тон.
+Используй поддерживающий и ободряющий тон. Объем твоего ответа должен быть примерно равен объему сообщения пользователя, но не меньше 3 предложений.
 Избегай:
 - Давать конкретные директивные советы ("Тебе нужно сделать X"). Вместо этого предлагай варианты или задавай наводящие вопросы ("Возможно, стоит рассмотреть вариант X?").
 - Давать медицинские, психиатрические, юридические или финансовые консультации.
@@ -19,82 +17,80 @@ AI_PERSONA_CONTEXT = """
 Если тема выходит за рамки твоей компетенции (например, срочный кризис, медицинский вопрос), вежливо перенаправь пользователя к специалистам или другим ресурсам.
 """
 
-# --- Получение API ключа ---
-# Ключ лучше хранить не в коде, а в переменной окружения, например GEMINI_API_KEY
-# Перед запуском бота нужно установить эту переменную в системе:
-# export GEMINI_API_KEY='ТВОЙ_API_КЛЮЧ' (для Linux/macOS)
-# set GEMINI_API_KEY=ТВОЙ_API_КЛЮЧ (для Windows)
-# Или использовать файлы .env и библиотеки вроде python-dotenv
-API_KEY = os.getenv("GEMINI_API")
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
 
-if not API_KEY:
-    print("Ошибка: Переменная окружения GEMINI_API не установлена!")
-    # В реальном приложении тут нужно более серьезная обработка или выход
-    # Для учебы можно пока захардкодить ключ здесь НА ВРЕМЯ РАЗРАБОТКИ,
-    # но НИКОГДА не оставляй его так в готовом коде!
-    # API_KEY = "ТВОЙ_СЕКРЕТНЫЙ_КЛЮЧ_GEMINI_ДЛЯ_РАЗРАБОТКИ"
-    pass # Оставляем pass, чтобы не упасть сразу, но функция ниже вернет ошибку
+DEEPSEEK_BASE_URL = "https://openrouter.ai/api/v1"
 
+DEEPSEEK_MODEL = 'deepseek/deepseek-chat-v3-0324:free'
 
-# Настройка Gemini API
-genai.configure(api_key=API_KEY)
-
-# Можно выбрать модель, например 'gemini-1.5-flash-latest' или 'gemini-1.5-pro-latest'
-# Проверь актуальные названия моделей в документации Google
-GEMINI_MODEL = 'gemini-2.5-flash-preview-04-17'
+# --- Инициализация клиента DeepSeek API ---
+# Создаем клиент OpenAI, но указываем ему базовый URL DeepSeek.
+deepseek_client = None
+if DEEPSEEK_API_KEY:
+    try:
+        deepseek_client = OpenAI(
+            api_key=DEEPSEEK_API_KEY,
+            base_url=DEEPSEEK_BASE_URL
+        )
+        print("DeepSeek API клиент успешно инициализирован.")
+    except Exception as e:
+        print(f"Ошибка инициализации DeepSeek API клиента: {e}")
+        deepseek_client = None # Убедимся, что клиент None в случае ошибки
 
 
 async def get_ai_response(user_id: int, current_message_text: str) -> str | None:
     """
-    Отправляет сообщение пользователя и историю диалога в Gemini API
+    Отправляет сообщение пользователя и историю диалога в DeepSeek API
     и возвращает ответ нейросети.
     """
-    if not API_KEY:
-        print("AI Service Error: API Key is not set.")
-        return "Произошла ошибка конфигурации AI сервиса (нет API ключа)." # Сообщение об ошибке для пользователя
+    # Проверяем, инициализирован ли клиент DeepSeek.
+    if deepseek_client is None:
+        print("AI Service Error: DeepSeek API клиент не инициализирован (возможно, нет API ключа).")
+        return "Произошла ошибка конфигурации AI сервиса (нет API ключа DeepSeek)."
 
     try:
-        dialogue_history = get_recent_dialogue(user_id, limit=10)
+        # Получаем последние 10 сообщений диалога из БД
+        dialogue_history = get_recent_dialogue(user_id, limit=5)
 
-        # --- 2. Формируем промпт / запрос для Gemini ---
-        # Формат запроса зависит от выбранной модели и библиотеки.
-        # Для моделей Gemini и библиотеки google-generativeai удобно использовать формат чата.
-        # История передается как список сообщений с ролями 'user' и 'model'.
-        # Системные инструкции передаются отдельно или включаются в первое сообщение.
+        # Формируем список сообщений для DeepSeek API в формате OpenAI-совместимых чат-комплишенов.
+        # Этот формат требует список словарей, каждый из которых имеет 'role' и 'content'.
+        # Роли: 'system', 'user', 'assistant'.
 
-        chat_messages = []
+        # Первое сообщение всегда должно быть системной инструкцией.
+        messages = [{"role": "system", "content": AI_PERSONA_CONTEXT}]
+
+        # Добавляем историю диалога.
+        # 'user' из нашей БД соответствует 'user' для API.
+        # 'bot' из нашей БД соответствует 'assistant' для API.
         for msg_text, timestamp, sender in dialogue_history:
-             role = 'user' if sender == 'user' else 'model' # Сопоставляем sender из БД с ролью для API
-             chat_messages.append({'role': role, 'parts': [msg_text]})
+            role = 'user' if sender == 'user' else 'assistant'
+            messages.append({"role": role, "content": msg_text})
 
-        # Если история нечетная (последнее сообщение от пользователя),
-        # добавим его как последний элемент истории, а current_message_text не добавляем пока.
-        # Если история четная или пустая, первое сообщение пользователя будет current_message_text
+        # Добавляем текущее сообщение пользователя как последнее сообщение в диалоге.
+        messages.append({"role": "user", "content": current_message_text})
 
-        history_for_api = []
+        print(f"Отправляем сообщение в DeepSeek для пользователя {user_id} (длина истории: {len(dialogue_history)}).")
+        # print(f"Сообщения для API: {messages}") # Можно включить для детальной отладки
 
-        for msg_text, timestamp, sender in dialogue_history:
-            api_role = 'user' if sender == 'user' else 'model'
-            history_for_api.append({'role': api_role, 'parts': [{'text': msg_text}]})
-
-        model = genai.GenerativeModel(model_name=GEMINI_MODEL, system_instruction=AI_PERSONA_CONTEXT)
-        chat = model.start_chat(history=history_for_api)
-
-        print(f"Sending message to Gemini for user {user_id}: {current_message_text}")
-        response = await chat.send_message(current_message_text)
-        print(f"Received response from Gemini for user {user_id}.")
+        # Выполняем запрос к API DeepSeek.
+        response = deepseek_client.chat.completions.create(
+            model=DEEPSEEK_MODEL,
+            messages=messages,
+            temperature=0.7, # Температура генерации (от 0 до 2.0). Выше - креативнее, ниже - точнее.
+            max_tokens=500,  # Максимальное количество токенов в ответе от модели.
+        )
+        print(f"Получен ответ от DeepSeek для пользователя {user_id}.")
 
         ai_response_text = None
-        try:
-            # Ответы могут содержать несколько частей. Берем текст.
-            ai_response_text = response.text
-        except ValueError:
-             # Если ответ пустой или не содержит текст (например, только Function Call или Blocked)
-             print(f"Gemini response did not contain text parts: {response}")
-
+        # Извлекаем текст ответа из структуры ответа DeepSeek (OpenAI-совместимой).
+        if response.choices and response.choices[0].message and response.choices[0].message.content:
+            ai_response_text = response.choices[0].message.content.strip()
+        else:
+            print(f"Ответ DeepSeek не содержал текстового контента: {response}")
+            return "Не удалось получить текстовый ответ от нейросети. Пожалуйста, попробуйте еще раз."
 
         return ai_response_text
 
     except Exception as e:
-        print(f"Ошибка при вызове Gemini API для пользователя {user_id}: {e}")
+        print(f"Ошибка при вызове DeepSeek API для пользователя {user_id}: {e}")
         return None
